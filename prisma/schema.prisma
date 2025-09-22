@@ -1,0 +1,378 @@
+// =======================================================
+//       DATABASE SCHEMA - DỰ ÁN MỚI
+//         HỆ THỐNG AI DATA CLEANER
+// =======================================================
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native"]
+  output        = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================
+// ENUMS CHUNG
+// =============================================
+enum RecordStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// =======================================================
+// 1. MÔ HÌNH XÁC THỰC & QUẢN LÝ NGƯỜI DÙNG (AUTH & USER)
+// =======================================================
+
+model User {
+  id                 String         @id @default(cuid())
+  email              String         @unique
+  password           String
+  role               UserRole       @default(USER)
+  status             UserStatus     @default(ACTIVE)
+  name               String?
+  fullName           String?
+  phone              String?
+  image              String?
+  lastLoginAt        DateTime?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  // Relations
+  accounts           Account[]
+  sessions           Session[]
+  employee           Employee?
+  auditLogs          AuditLog[]
+  securityLogs       SecurityLog[]
+  uploadedFiles      SourceFile[]     @relation("FileUploader")
+  reviewedRecords    CleanedRecord[]  @relation("RecordReviewer")
+  createdDictionary  Dictionary[]     @relation("DictionaryCreator")
+  approvedDictionary Dictionary[]     @relation("DictionaryApprover")
+
+  @@map("users")
+  @@index([status])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  REVIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+// =======================================================
+// 2. MÔ HÌNH XỬ LÝ DỮ LIỆU CỐT LÕI (CORE DATA PROCESSING)
+// =======================================================
+
+model SourceFile {
+  id                 String               @id @default(cuid())
+  originalName       String
+  fileName           String               @unique
+  cloudStoragePath   String
+  fileType           String
+  fileSize           Int
+  uploadedAt         DateTime             @default(now())
+  uploadedById       String
+  uploadedBy         User                 @relation("FileUploader", fields: [uploadedById], references: [id])
+  ocrStatus          OCRStatus            @default(PENDING)
+  ocrProcessedAt     DateTime?
+  ocrErrorMessage    String?
+  extractedText      String?              @db.Text
+  status             FileProcessingStatus @default(UPLOADED)
+  errorMessage       String?
+  cleanedRecords     CleanedRecord[]
+  processingJobs     FileProcessingJob[]
+
+  @@map("source_files")
+  @@index([status])
+  @@index([ocrStatus])
+  @@index([uploadedAt])
+}
+
+model CleanedRecord {
+  id                 String       @id @default(cuid())
+  sourceFileId       String
+  sourceFile         SourceFile   @relation(fields: [sourceFileId], references: [id], onDelete: Cascade)
+  cleanedText        String       @db.Text
+  cleaningOps        Json
+  confidenceScore    Float?
+  qualityScore       Float?
+  category           String?
+  keywords           String[]
+  reviewStatus       ReviewStatus @default(PENDING)
+  reviewNotes        String?      @db.Text
+  reviewedAt         DateTime?
+  reviewedById       String?
+  reviewedBy         User?        @relation("RecordReviewer", fields: [reviewedById], references: [id])
+  createdAt          DateTime     @default(now())
+
+  @@map("cleaned_records")
+  @@index([category])
+  @@index([reviewStatus])
+  @@index([createdAt])
+}
+
+model FileProcessingJob {
+  id           String      @id @default(cuid())
+  sourceFileId String
+  sourceFile   SourceFile  @relation(fields: [sourceFileId], references: [id], onDelete: Cascade)
+  jobType      FileJobType
+  status       JobStatus   @default(QUEUED)
+  progress     Int         @default(0)
+  startedAt    DateTime?
+  completedAt  DateTime?
+  errorMessage String?
+  results      Json?
+  createdAt    DateTime    @default(now())
+
+  @@map("file_processing_jobs")
+  @@index([status])
+  @@index([jobType])
+}
+
+enum FileProcessingStatus {
+  QUEUED
+  UPLOADED
+  PROCESSING
+  COMPLETED
+  ERROR
+}
+
+enum OCRStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  ERROR
+  NOT_REQUIRED
+}
+
+enum ReviewStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  NEEDS_REVISION
+}
+
+enum FileJobType {
+  OCR_EXTRACTION
+  TEXT_CLEANING
+  CONTENT_CATEGORIZATION
+  QUALITY_ANALYSIS
+  DATA_EXPORT
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+// =======================================================
+// 3. MÔ HÌNH QUẢN LÝ TỪ ĐIỂN (DICTIONARY)
+// =======================================================
+
+model Dictionary {
+  id            String          @id @default(cuid())
+  term          String          @unique
+  definition    String          @db.Text
+  category      String?
+  createdBy     String
+  creator       User            @relation("DictionaryCreator", fields: [createdBy], references: [id])
+  isApproved    Boolean         @default(false)
+  approvedBy    String?
+  approver      User?           @relation("DictionaryApprover", fields: [approvedBy], references: [id])
+  approvedAt    DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@map("dictionary")
+  @@index([category])
+  @@index([isApproved])
+}
+
+// =======================================================
+// 4. MÔ HÌNH QUẢN LÝ NHÂN SỰ (HR)
+// =======================================================
+
+model Department {
+  id          String        @id @default(cuid())
+  name        String        @unique
+  code        String        @unique
+  description String?
+  managerId   String?       @unique
+  parentId    String?
+  manager     Employee?     @relation("DepartmentManager", fields: [managerId], references: [id], onDelete: SetNull)
+  parent      Department?   @relation("DepartmentHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Department[]  @relation("DepartmentHierarchy")
+  employees   Employee[]
+  roles       Role[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  status      RecordStatus  @default(ACTIVE)
+
+  @@map("departments")
+  @@index([status])
+}
+
+model Role {
+  id           String         @id @default(cuid())
+  name         String         @unique
+  code         String         @unique
+  description  String?
+  level        Int            @default(1)
+  employees    Employee[]
+  permissions  RolePermission[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  status       RecordStatus   @default(ACTIVE)
+
+  @@map("roles")
+  @@index([status])
+  Department Department[]
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  name        String           @unique
+  resource    String
+  action      String
+  description String?
+  createdAt   DateTime         @default(now())
+  roles       RolePermission[]
+
+  @@map("permissions")
+  @@unique([resource, action])
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@map("role_permissions")
+  @@unique([roleId, permissionId])
+}
+
+model Employee {
+  id                String       @id @default(cuid())
+  userId            String       @unique
+  employeeCode      String       @unique
+  departmentId      String
+  roleId            String
+  managerId         String?
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department        Department   @relation(fields: [departmentId], references: [id])
+  role              Role         @relation(fields: [roleId], references: [id])
+  manager           Employee?    @relation("ManagerSubordinates", fields: [managerId], references: [id], onDelete: SetNull)
+  subordinates      Employee[]   @relation("ManagerSubordinates")
+  managesDepartment Department?  @relation("DepartmentManager")
+  position          String
+  hireDate          DateTime
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  status            RecordStatus @default(ACTIVE)
+
+  @@map("employees")
+  @@index([status])
+  @@index([departmentId])
+}
+
+// =======================================================
+// 5. CÁC MÔ HÌNH LOGGING & GIÁM SÁT (LOGGING)
+// =======================================================
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action       String
+  resource     String
+  resourceId   String?
+  success      Boolean  @default(true)
+  errorMessage String?
+  createdAt    DateTime @default(now())
+
+  @@map("audit_logs")
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model SecurityLog {
+  id          String           @id @default(cuid())
+  userId      String?
+  user        User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  eventType   SecurityEventType
+  severity    SecuritySeverity @default(LOW)
+  description String
+  ipAddress   String?
+  metadata    Json?
+  createdAt   DateTime         @default(now())
+
+  @@map("security_logs")
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+enum SecurityEventType {
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGOUT
+  PASSWORD_CHANGED
+  SYSTEM_ERROR
+  PIPELINE_ERROR
+}
+
+enum SecuritySeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
