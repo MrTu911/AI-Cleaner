@@ -1,0 +1,55 @@
+# docker-compose.yml
+# =======================================================
+# BẢN THIẾT KẾ HẠ TẦNG MÁY CHỦ TRÊN LAPTOP
+# -------------------------------------------------------
+# - Chạy 3 dịch vụ: CSDL PostgreSQL, Redis, và Lưu trữ file MinIO.
+# - Dữ liệu sẽ được lưu lại trên máy của bạn, không bị mất khi tắt/mở.
+# - Khởi động tất cả chỉ bằng một câu lệnh.
+# =======================================================
+version: '3.8'
+
+services:
+  # 1. Dịch vụ CSDL PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: 'postgres'         # ❗️ Đặt tên user của bạn
+      POSTGRES_PASSWORD: 'admin123' # ❗️ Đặt mật khẩu của bạn
+      POSTGRES_DB: 'ai_data_cleaner'    # Tên CSDL
+    ports:
+      - "5432:5432" # Kết nối từ app vào CSDL qua cổng 5432
+    volumes:
+      - /home/mrtu/postgres-data:/var/lib/postgresql/data # Lưu dữ liệu CSDL vào thư mục postgres-data
+
+  # 2. Dịch vụ Redis (dùng cho hàng đợi)
+  redis:
+    image: redis:7-alpine
+    container_name: redis_queue
+    restart: always
+    ports:
+      - "6380:6379" # Kết nối từ app/worker vào Redis qua cổng 6379
+    volumes:
+      - ./redis-data:/data
+
+  # 3. Dịch vụ Lưu trữ File MinIO
+  minio:
+    image: minio/minio:latest
+    container_name: minio_storage
+    restart: always
+    ports:
+      - "9000:9000" # Cổng API để ứng dụng kết nối
+      - "9001:9001" # Cổng giao diện web để quản lý
+    environment:
+      MINIO_ROOT_USER: 'admin'     # ❗️ Đặt access key của bạn
+      MINIO_ROOT_PASSWORD: 'admin123' # ❗️ Đặt secret key của bạn
+    volumes:
+      - ./minio-data:/data
+    command: server /data --console-address ":9001"
+
+# Định nghĩa các volume để lưu trữ dữ liệu bền bỉ
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
